@@ -1,0 +1,1 @@
+docker run --runtime=nvidia -it -v /home/cameron:/workspace -p 8888:8888 nvcr.io/nvidia/tensorflow:21.04-tf2-py3 bash
