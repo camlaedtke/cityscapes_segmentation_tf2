@@ -22,7 +22,6 @@ class ReduceLROnPlateau:
 
 
     def update(self, metric_logs, optimizer):
-        # pass optimizer.inner_optimizer when using AMP
         
         current = metric_logs[self.monitor][-1]
         
@@ -40,10 +39,11 @@ class ReduceLROnPlateau:
                 self.wait = self.wait + 1
                 
         if self.wait > self.patience:
-            reduced_lr = optimizer._decayed_lr(tf.float32) * self.factor
+            reduced_lr = optimizer.inner_optimizer.lr.read_value().numpy() * self.factor
             if reduced_lr > self.min_lr:
-                optimizer.learning_rate.assign(reduced_lr)
-                print(" \n Learning rate decreased to {}".format(optimizer._lr))
+                optimizer.inner_optimizer.lr.assign(reduced_lr)
+                print(" \n Learning rate decreased to {}".format(
+                    optimizer.inner_optimizer.lr.read_value().numpy()))
             self.wait = 0
             
         return optimizer

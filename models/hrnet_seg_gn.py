@@ -258,6 +258,8 @@ class HighResolutionNet(tf.keras.models.Model):
         last_inp_channels = np.int(np.sum(pre_stage_channels))
 
         # Last layer
+        self.out_width = 1024
+        self.out_height = 512
         self.last_layer = Sequential([
             Conv2D(filters=last_inp_channels, kernel_size=1, strides=1, padding="same", use_bias=False),
             GroupNormalization(groups=GN_GROUPS),
@@ -354,6 +356,9 @@ class HighResolutionNet(tf.keras.models.Model):
         return ys
 
     def call(self, inputs, training=None, mask=None):
+        self.out_height = inputs.get_shape()[1]
+        self.out_width = inputs.get_shape()[2]
+        
         x = self.conv1(inputs)
         x = self.bn1(x)
         x = self.relu(x)
@@ -410,7 +415,7 @@ def HRNet(stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, input_height, input_wi
     model = HighResolutionNet(stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, n_classes, W)
     
     # Initialize weights of the network
-    inp_test = tf.random.normal(shape=(2, input_height, input_width, 3))
+    inp_test = tf.random.normal(shape=(1, input_height, input_width, 3))
     out_test = model(inp_test)
     
     model._name = "HRNet_GN_W{}".format(W)

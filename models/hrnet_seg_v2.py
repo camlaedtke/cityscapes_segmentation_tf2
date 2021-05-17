@@ -200,11 +200,10 @@ blocks_dict = {
 
 
 class HighResolutionNet(tf.keras.models.Model):
-    def __init__(self, stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, n_classes, W=32):
+    def __init__(self, stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, input_height, input_width, n_classes, W=32):
         super(HighResolutionNet, self).__init__()
-        
+
         C, C2, C4, C8 = W, int(W*2), int(W*4), int(W*8)
-        
         
         stage1_cfg['NUM_CHANNELS'] = [C]
         stage2_cfg['NUM_CHANNELS'] = [C, C2]
@@ -254,13 +253,15 @@ class HighResolutionNet(tf.keras.models.Model):
         self.stage4, pre_stage_channels = self._make_stage(self.stage4_cfg, num_channels)
 
         last_inp_channels = np.int(np.sum(pre_stage_channels))
+        
+        # Upsample
+        self.upsample_out = Lambda(lambda xx: tf.image.resize(xx, size=(input_height, input_width)))
 
         # Last layer
         self.last_layer = Sequential([
             Conv2D(filters=last_inp_channels, kernel_size=1, strides=1, padding="same", use_bias=False),
             BatchNormalization(momentum=BN_MOMENTUM),
             ReLU(),
-            UpSampling2D(size=(4,4), interpolation='bilinear'),
             Conv2D(filters=self.NUM_CLASSES, kernel_size=1, strides=1, padding="same", dtype="float32")
         ])
         
@@ -390,14 +391,14 @@ class HighResolutionNet(tf.keras.models.Model):
         x = self._forward_stage(self.stage4, x_list)
 
         # Upsampling
-        x0_h, x0_w = x[0].get_shape()[1], x[0].get_shape()[2]
-        
-        x1 = tf.image.resize(x[1], size=(x0_h, x0_w))
-        x2 = tf.image.resize(x[2], size=(x0_h, x0_w))
-        x3 = tf.image.resize(x[3], size=(x0_h, x0_w))
+        x0 = tf.cast(x[0], tf.float32)
+        x0 = self.upsample_out(x0)
+        x1 = self.upsample_out(x[1])
+        x2 = self.upsample_out(x[2])
+        x3 = self.upsample_out(x[3])
         
         # Concat
-        x = tf.concat([tf.cast(x[0], tf.float32), x1, x2, x3], axis=3)
+        x = tf.concat([x0, x1, x2, x3], axis=3)
 
         x = self.last_layer(x)
 
@@ -406,7 +407,8 @@ class HighResolutionNet(tf.keras.models.Model):
 
 def HRNet(stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, input_height, input_width, n_classes=20, W=32):
     
-    model = HighResolutionNet(stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, n_classes, W)
+    model = HighResolutionNet(stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, 
+                              input_height, input_width, n_classes, W)
     
     # Initialize weights of the network
     inp_test = tf.random.normal(shape=(1, input_height, input_width, 3))

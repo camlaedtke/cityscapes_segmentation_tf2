@@ -1,10 +1,11 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.layers import Conv2D, BatchNormalization, ReLU, UpSampling2D, Lambda
+from tensorflow.keras.layers import Conv2D, ReLU, UpSampling2D, Lambda
 from tensorflow.keras.models import Sequential
+from tensorflow_addons.layers import GroupNormalization
 
 
-BN_MOMENTUM = 0.1
+GN_GROUPS = 32
 
 
 def conv3x3(out_planes, stride=1):
@@ -19,10 +20,10 @@ class BasicBlock(tf.keras.layers.Layer):
         super(BasicBlock, self).__init__(**kwargs)
         self.downsample = downsample
         self.conv1 = conv3x3(output_dim, stride)
-        self.bn1 = BatchNormalization(momentum=BN_MOMENTUM)
+        self.bn1 = GroupNormalization(groups=GN_GROUPS)
         self.relu = ReLU()
         self.conv2 = conv3x3(output_dim)
-        self.bn2 = BatchNormalization(momentum=BN_MOMENTUM)
+        self.bn2 = GroupNormalization(groups=GN_GROUPS)
 
     def call(self, inputs, training=None, mask=None):
         residual = inputs
@@ -49,11 +50,11 @@ class Bottleneck(tf.keras.layers.Layer):
         super(Bottleneck, self).__init__(**kwargs)
         self.downsample = downsample
         self.conv1 = Conv2D(filters=output_dim, kernel_size=1, padding="same", use_bias=False)
-        self.bn1 = BatchNormalization(momentum=BN_MOMENTUM)
+        self.bn1 = GroupNormalization(groups=GN_GROUPS)
         self.conv2 = Conv2D(filters=output_dim, kernel_size=3, strides=stride, padding="same", use_bias=False)
-        self.bn2 = BatchNormalization(momentum=BN_MOMENTUM)
+        self.bn2 = GroupNormalization(groups=GN_GROUPS)
         self.conv3 = Conv2D(filters=output_dim*self.expansion, kernel_size=1, padding="same", use_bias=False)
-        self.bn3 = BatchNormalization(momentum=BN_MOMENTUM)
+        self.bn3 = GroupNormalization(groups=GN_GROUPS)
         self.relu = ReLU()
 
     def call(self, inputs, training=None, mask=None):
@@ -104,7 +105,7 @@ class HighResolutionModule(tf.keras.layers.Layer):
                     num_channels[branch_index] * block.expansion,
                     kernel_size=1, strides=stride, bias=False
                 ),
-                BatchNormalization(momentum=BN_MOMENTUM),
+                GroupNormalization(groups=GN_GROUPS),
             )
             
         layers = [block(self.num_inchannels[branch_index], num_channels[branch_index], stride, downsample)]
@@ -133,7 +134,7 @@ class HighResolutionModule(tf.keras.layers.Layer):
                 if j > i:
                     fuse_layer.append(Sequential([
                         Conv2D(num_inchannels[i], kernel_size=(1, 1), strides=(1, 1), padding="same", use_bias=False),
-                        BatchNormalization(momentum=BN_MOMENTUM),
+                        GroupNormalization(groups=GN_GROUPS),
                         UpSampling2D(size=(2 ** (j - i), 2 ** (j - i)), interpolation='bilinear')
                     ]))
                 elif j == i:
@@ -145,13 +146,13 @@ class HighResolutionModule(tf.keras.layers.Layer):
                             num_outchannels_conv3x3 = num_inchannels[i]
                             conv3x3s.append(Sequential([
                                 Conv2D(num_outchannels_conv3x3,kernel_size=(3,3),strides=(2,2),padding="same",use_bias=False),
-                                BatchNormalization(momentum=BN_MOMENTUM)
+                                GroupNormalization(groups=GN_GROUPS),
                             ]))
                         else:
                             num_outchannels_conv3x3 = num_inchannels[j]
                             conv3x3s.append(Sequential([
                                 Conv2D(num_outchannels_conv3x3,kernel_size=(3,3),strides=(2,2),padding="same",use_bias=False),
-                                BatchNormalization(momentum=BN_MOMENTUM),
+                                GroupNormalization(groups=GN_GROUPS),
                                 ReLU()
                             ]))
                     fuse_layer.append(Sequential(conv3x3s))
@@ -200,11 +201,11 @@ blocks_dict = {
 
 
 class HighResolutionNet(tf.keras.models.Model):
-    def __init__(self, stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, n_classes, W=32):
+    def __init__(self, stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, 
+                 input_height, input_width, n_classes, W=32):
         super(HighResolutionNet, self).__init__()
         
         C, C2, C4, C8 = W, int(W*2), int(W*4), int(W*8)
-        
         
         stage1_cfg['NUM_CHANNELS'] = [C]
         stage2_cfg['NUM_CHANNELS'] = [C, C2]
@@ -220,9 +221,9 @@ class HighResolutionNet(tf.keras.models.Model):
 
         # stem net
         self.conv1 = Conv2D(filters=64, kernel_size=3, strides=2, padding="same", use_bias=False)
-        self.bn1 = BatchNormalization(momentum=BN_MOMENTUM)
+        self.bn1 = GroupNormalization(groups=GN_GROUPS)
         self.conv2 = Conv2D(filters=64, kernel_size=3, strides=2, padding="same", use_bias=False)
-        self.bn2 = BatchNormalization(momentum=BN_MOMENTUM)
+        self.bn2 = GroupNormalization(groups=GN_GROUPS)
         self.relu = ReLU()
 
         # STAGE 1
@@ -257,10 +258,13 @@ class HighResolutionNet(tf.keras.models.Model):
 
         # Last layer
         self.last_layer = Sequential([
+            UpSampling2D(size=(2, 2), interpolation="bilinear"),
             Conv2D(filters=last_inp_channels, kernel_size=1, strides=1, padding="same", use_bias=False),
-            BatchNormalization(momentum=BN_MOMENTUM),
+            GroupNormalization(groups=GN_GROUPS),
             ReLU(),
-            UpSampling2D(size=(4,4), interpolation='bilinear'),
+            UpSampling2D(size=(2, 2), interpolation="bilinear"),
+            Conv2D(filters=C, kernel_size=1, strides=1, padding="same", use_bias=False),
+            GroupNormalization(groups=GN_GROUPS),
             Conv2D(filters=self.NUM_CLASSES, kernel_size=1, strides=1, padding="same", dtype="float32")
         ])
         
@@ -277,7 +281,7 @@ class HighResolutionNet(tf.keras.models.Model):
                     transition_layers.append(Sequential([
                         Conv2D(filters=num_channels_cur_layer[i],kernel_size=(3,3),strides=(1,1),padding="same",
                                use_bias=False),
-                        BatchNormalization(momentum=BN_MOMENTUM),
+                        GroupNormalization(groups=GN_GROUPS),
                         ReLU()
                     ]))
                 else:
@@ -289,7 +293,7 @@ class HighResolutionNet(tf.keras.models.Model):
                     outchannels = num_channels_cur_layer[i] if j == i - num_branches_pre else inchannels
                     conv3x3s.append(Sequential([
                         Conv2D(filters=outchannels, kernel_size=(3,3), strides=(2,2), padding="same", use_bias=False),
-                        BatchNormalization(),
+                        GroupNormalization(groups=GN_GROUPS),
                         ReLU()
                     ]))
                 transition_layers.append(Sequential(conv3x3s))
@@ -331,7 +335,7 @@ class HighResolutionNet(tf.keras.models.Model):
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = Sequential([
                 Conv2D(planes * block.expansion, kernel_size=(1,1), strides=(stride,stride), padding="same",use_bias=False),
-                BatchNormalization(momentum=BN_MOMENTUM)
+                GroupNormalization(groups=GN_GROUPS)
             ])
 
         layers = [block(self.inplanes, planes, stride, downsample)]
@@ -352,6 +356,9 @@ class HighResolutionNet(tf.keras.models.Model):
         return ys
 
     def call(self, inputs, training=None, mask=None):
+        self.out_height = inputs.get_shape()[1]
+        self.out_width = inputs.get_shape()[2]
+        
         x = self.conv1(inputs)
         x = self.bn1(x)
         x = self.relu(x)
@@ -391,7 +398,6 @@ class HighResolutionNet(tf.keras.models.Model):
 
         # Upsampling
         x0_h, x0_w = x[0].get_shape()[1], x[0].get_shape()[2]
-        
         x1 = tf.image.resize(x[1], size=(x0_h, x0_w))
         x2 = tf.image.resize(x[2], size=(x0_h, x0_w))
         x3 = tf.image.resize(x[3], size=(x0_h, x0_w))
@@ -406,13 +412,13 @@ class HighResolutionNet(tf.keras.models.Model):
 
 def HRNet(stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, input_height, input_width, n_classes=20, W=32):
     
-    model = HighResolutionNet(stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, n_classes, W)
+    model = HighResolutionNet(stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, 
+                              input_height, input_width, n_classes, W)
     
     # Initialize weights of the network
     inp_test = tf.random.normal(shape=(1, input_height, input_width, 3))
     out_test = model(inp_test)
     
-    model._name = "HRNet_W{}".format(W)
+    model._name = "HRNet_GN_W{}".format(W)
     
     return model
-

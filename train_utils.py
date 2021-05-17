@@ -135,7 +135,6 @@ class TrainAccumilator:
     def fit(self, epochs, train_dataset, test_dataset, weights_path):
        
         for epoch in range(epochs):
-            epoch_start_time = time()
         
             train_batch_losses = self.train_model(train_dataset)
                     
@@ -159,10 +158,9 @@ class TrainAccumilator:
             self.do_callbacks()
                 
             
-            t_epoch = time() - epoch_start_time
-            print("\nEpoch {} -- {:.2f}s -- loss: {:.4f} , accuracy: {:.4f}, miou: {:.4f},"\
+            print("\nEpoch {} - loss: {:.4f} , accuracy: {:.4f}, miou: {:.4f},"\
                   " val_loss: {:.4f}, val_accuracy: {:.4f}, val_miou: {:.4f}, lr: {:.10f}".format(epoch+1, 
-                   t_epoch, train_loss, train_acc, train_miou, val_loss, val_acc, val_miou, curr_lr))
+                   train_loss, train_acc, train_miou, val_loss, val_acc, val_miou, curr_lr))
             
             self.model.save_weights(weights_path)
             
