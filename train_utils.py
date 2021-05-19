@@ -4,10 +4,9 @@ from time import time
 from tqdm import tqdm
 
 
-
 class TrainAccumilator:
     
-    # TODO: Change hard-coded metrics and callbacks, get optimizer updates to work
+    # TODO: Change hard-coded metrics and callbacks
     
     def __init__(self, accum_steps, model, optimizer, loss_fn, n_classes, reduce_lr_on_plateau=None):
         self.accum_steps = accum_steps
@@ -22,7 +21,6 @@ class TrainAccumilator:
         self.val_miou_metric = tf.keras.metrics.MeanIoU(num_classes=n_classes)
         
         self.reduce_lr_on_plateau = reduce_lr_on_plateau
-        
         
         self.history = {
             "loss": [], 
@@ -47,17 +45,14 @@ class TrainAccumilator:
         
         self.train_acc_metric.reset_states()
         self.train_miou_metric.reset_states()
-        
         self.val_acc_metric.reset_states()
         self.val_miou_metric.reset_states()
         
         
     def do_callbacks(self):
         if self.reduce_lr_on_plateau is not None:
-            self.optimizer.inner_optimizer = self.reduce_lr_on_plateau.update(
-                self.history, self.optimizer.inner_optimizer)
+            self.optimizer.inner_optimizer = self.reduce_lr_on_plateau.update(self.history, self.optimizer)
         
-
         
     @tf.function
     def accumilate_train_step(self, x, y, accum_gradient, train_vars):
@@ -131,7 +126,6 @@ class TrainAccumilator:
         return test_batch_losses
         
         
-        
     def fit(self, epochs, train_dataset, test_dataset, weights_path):
        
         for epoch in range(epochs):
@@ -156,7 +150,6 @@ class TrainAccumilator:
             self.log_metrics(train_loss, train_acc, train_miou, val_loss, val_acc, val_miou, curr_lr)
             
             self.do_callbacks()
-                
             
             print("\nEpoch {} - loss: {:.4f} , accuracy: {:.4f}, miou: {:.4f},"\
                   " val_loss: {:.4f}, val_accuracy: {:.4f}, val_miou: {:.4f}, lr: {:.10f}".format(epoch+1, 
@@ -164,14 +157,13 @@ class TrainAccumilator:
             
             self.model.save_weights(weights_path)
             
-            
         print("Training finished")
         return self.history
+
             
+
             
-            
-            
+
         
-        
-   
+
 
