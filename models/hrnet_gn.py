@@ -257,15 +257,15 @@ class HighResolutionNet(tf.keras.models.Model):
         last_inp_channels = np.int(np.sum(pre_stage_channels))
         
         # Upsample
-        self.upsample_out = Lambda(lambda xx: tf.image.resize(xx, size=(input_height//2, input_width//2)))
+        # self.upsample_out = Lambda(lambda xx: tf.image.resize(xx, size=(input_height//2, input_width//2)))
 
         # Last layer
         self.last_layer = Sequential([
             Conv2D(filters=last_inp_channels, kernel_size=1, strides=1, padding="same", use_bias=False),
             GroupNormalization(groups=GN_GROUPS),
             ReLU(),
-            UpSampling2D(size=(2, 2), interpolation="bilinear"),
-            Conv2D(filters=self.NUM_CLASSES, kernel_size=1, strides=1, padding="same", dtype="float32")
+            Conv2D(filters=self.NUM_CLASSES, kernel_size=1, strides=1, padding="same", dtype="float32"),
+            Lambda(lambda xx: tf.image.resize(xx, size=(input_height, input_width)))
         ])
         
 
@@ -397,16 +397,18 @@ class HighResolutionNet(tf.keras.models.Model):
         x = self._forward_stage(self.stage4, x_list)
 
         # Upsampling
-        x0 = tf.cast(x[0], tf.float32)
-        x0 = self.upsample_out(x0)
-        x1 = self.upsample_out(x[1])
-        x2 = self.upsample_out(x[2])
-        x3 = self.upsample_out(x[3])
-        
+        x0_h, x0_w = x[0].get_shape()[1], x[0].get_shape()[2]
+        x1 = tf.image.resize(x[1], size=(x0_h, x0_w))
+        x2 = tf.image.resize(x[2], size=(x0_h, x0_w))
+        x3 = tf.image.resize(x[3], size=(x0_h, x0_w))
+
         # Concat
+        x0 = tf.cast(x[0], tf.float32)
         x = tf.concat([x0, x1, x2, x3], axis=3)
 
         x = self.last_layer(x)
+
+        x = tf.image.resize(x, size=(self.input_height, self.input_width))
 
         return x
 
