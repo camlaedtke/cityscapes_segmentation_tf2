@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.layers import Conv2D, BatchNormalization, ReLU, UpSampling2D, Lambda
+from tensorflow.keras.layers import (Conv2D, BatchNormalization, ReLU, UpSampling2D,
+                                     Lambda, Flatten, Dense, AveragePooling2D, GlobalAveragePooling2D)
 from tensorflow.keras.models import Sequential
 
 
@@ -80,8 +81,8 @@ class Bottleneck(tf.keras.layers.Layer):
 
 
 class HighResolutionModule(tf.keras.layers.Layer):
-    def __init__(self, num_branches, blocks, num_blocks, num_inchannels, num_channels,
-                 multi_scale_output=True, **kwargs):
+    def __init__(self, num_branches, blocks, num_blocks, num_inchannels, num_channels, multi_scale_output=True, **kwargs):
+        
         super(HighResolutionModule, self).__init__(**kwargs)
 
         self.num_inchannels = num_inchannels
@@ -98,12 +99,13 @@ class HighResolutionModule(tf.keras.layers.Layer):
     def _make_one_branch(self, branch_index, block, num_blocks, num_channels, stride=1):
         downsample = None
         if stride != 1 or self.num_inchannels[branch_index] != num_channels[branch_index] * block.expansion:
+            print("Creating new downsample layer")
             downsample = Sequential(
                 Conv2D(
-                    self.num_inchannels[branch_index],
-                    num_channels[branch_index] * block.expansion,
-                    kernel_size=1, strides=stride, bias=False
-                ),
+                    filters=num_channels[branch_index] * block.expansion,
+                    kernel_size=1, 
+                    strides=stride, 
+                    bias=False),
                 BatchNormalization(momentum=BN_MOMENTUM),
             )
             
@@ -132,7 +134,13 @@ class HighResolutionModule(tf.keras.layers.Layer):
             for j in range(num_branches):
                 if j > i:
                     fuse_layer.append(Sequential([
-                        Conv2D(num_inchannels[i], kernel_size=(1, 1), strides=(1, 1), padding="same", use_bias=False),
+                        Conv2D(
+                            filters=num_inchannels[i], 
+                            kernel_size=(1, 1), 
+                            strides=(1, 1), 
+                            padding="same", 
+                            use_bias=False
+                        ),
                         BatchNormalization(momentum=BN_MOMENTUM),
                         UpSampling2D(size=(2 ** (j - i), 2 ** (j - i)), interpolation='bilinear')
                     ]))
@@ -144,13 +152,23 @@ class HighResolutionModule(tf.keras.layers.Layer):
                         if k == i - j - 1:
                             num_outchannels_conv3x3 = num_inchannels[i]
                             conv3x3s.append(Sequential([
-                                Conv2D(num_outchannels_conv3x3,kernel_size=(3,3),strides=(2,2),padding="same",use_bias=False),
+                                Conv2D(
+                                    filters=num_outchannels_conv3x3,
+                                    kernel_size=(3,3),
+                                    strides=(2,2),
+                                    padding="same",
+                                    use_bias=False),
                                 BatchNormalization(momentum=BN_MOMENTUM)
                             ]))
                         else:
                             num_outchannels_conv3x3 = num_inchannels[j]
                             conv3x3s.append(Sequential([
-                                Conv2D(num_outchannels_conv3x3,kernel_size=(3,3),strides=(2,2),padding="same",use_bias=False),
+                                Conv2D(
+                                    filters=num_outchannels_conv3x3,
+                                    kernel_size=(3,3),
+                                    strides=(2,2),
+                                    padding="same",
+                                    use_bias=False),
                                 BatchNormalization(momentum=BN_MOMENTUM),
                                 ReLU()
                             ]))
@@ -179,12 +197,6 @@ class HighResolutionModule(tf.keras.layers.Layer):
             for j in range(1, self.num_branches):
                 if i == j:
                     y = y + tf.cast(inputs[j], tf.float32)
-                elif j > 1:
-                    xx = self.fuse_layers[i][j](inputs[j])
-                    xx = tf.cast(xx, tf.float32)
-                    width_output = inputs[i].get_shape()[-2]
-                    height_output = inputs[i].get_shape()[-3]
-                    y = y + tf.image.resize(xx, size=(height_output, width_output))
                 else:
                     xx = self.fuse_layers[i][j](inputs[j])
                     xx = tf.cast(xx, tf.float32)
@@ -199,9 +211,20 @@ blocks_dict = {
 }
 
 
-class HRNet(tf.keras.models.Model):
-    def __init__(self, stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, input_height, input_width, n_classes, W=32):
-        super(HRNet, self).__init__()
+class HRNet_CLF(tf.keras.models.Model):
+    def __init__(self, 
+                 stage1_cfg, 
+                 stage2_cfg, 
+                 stage3_cfg, 
+                 stage4_cfg, 
+                 input_height, 
+                 input_width, 
+                 n_classes, 
+                 W,
+                 ACCUM_STEPS,
+                 *args, **kwargs):
+
+        super(HRNet_CLF, self).__init__(*args, **kwargs)
 
         C, C2, C4, C8 = W, int(W*2), int(W*4), int(W*8)
         
@@ -215,6 +238,7 @@ class HRNet(tf.keras.models.Model):
         self.stage3_cfg = stage3_cfg
         self.stage4_cfg = stage4_cfg
         self.NUM_CLASSES = n_classes
+        self.ACCUM_STEPS = ACCUM_STEPS
         self.inplanes = 64
         self.input_height = input_height
         self.input_width = input_width
@@ -255,20 +279,62 @@ class HRNet(tf.keras.models.Model):
         self.transition3 = self._make_transition_layer(pre_stage_channels, num_channels)
         self.stage4, pre_stage_channels = self._make_stage(self.stage4_cfg, num_channels)
 
-        last_inp_channels = np.int(np.sum(pre_stage_channels))
+        # Classification Head
+        self.incre_modules, self.downsamp_modules, self.final_layer = self._make_head(pre_stage_channels)
+
+        self.build_model()
         
+        
+    def _make_head(self, pre_stage_channels):
+        
+        head_block = Bottleneck
+        head_channels = [32, 64, 128, 256]
 
+        # Increasing the #channels on each resolution 
+        # from C, 2C, 4C, 8C to 128, 256, 512, 1024
+        incre_modules = []
+        for i, channels  in enumerate(pre_stage_channels):
+            incre_module = self._make_layer(
+                block=head_block, 
+                planes=head_channels[i], 
+                blocks=1, 
+                stride=1
+            )
+            incre_modules.append(incre_module)
+        
+            
+        # downsampling modules
+        downsamp_modules = []
+        for i in range(len(pre_stage_channels)-1):
+            out_channels = head_channels[i+1] * head_block.expansion
 
-        # Last layer
-        self.last_layer = Sequential([
-            Conv2D(filters=last_inp_channels, kernel_size=1, strides=1, padding="same", use_bias=False),
+            downsamp_module = Sequential([
+                Conv2D(
+                    filters=out_channels,
+                    kernel_size=(3,3),
+                    strides=(2,2),
+                    padding='same'
+                ),
+                BatchNormalization(momentum=BN_MOMENTUM),
+                ReLU()
+            ])
+
+            downsamp_modules.append(downsamp_module)
+
+        final_layer = Sequential([
+            Conv2D(
+                filters=2048,
+                kernel_size=(1,1),
+                strides=(1,1),
+                padding='valid'
+            ),
             BatchNormalization(momentum=BN_MOMENTUM),
             ReLU(),
-            Conv2D(filters=self.NUM_CLASSES, kernel_size=1, strides=1, padding="same", dtype="float32"),
-            Lambda(lambda xx: tf.image.resize(xx, size=(input_height, input_width)))
+            GlobalAveragePooling2D(),
+            Dense(self.NUM_CLASSES, dtype='float32')
         ])
-        
-        self.build_model()
+
+        return incre_modules, downsamp_modules, final_layer
         
 
     @staticmethod
@@ -281,8 +347,12 @@ class HRNet(tf.keras.models.Model):
             if i < num_branches_pre:
                 if num_channels_cur_layer[i] != num_channels_pre_layer[i]:
                     transition_layers.append(Sequential([
-                        Conv2D(filters=num_channels_cur_layer[i],kernel_size=(3,3),strides=(1,1),padding="same",
-                               use_bias=False),
+                        Conv2D(
+                            filters=num_channels_cur_layer[i],
+                            kernel_size=(3,3),
+                            strides=(1,1),
+                            padding="same",
+                            use_bias=False),
                         BatchNormalization(momentum=BN_MOMENTUM),
                         ReLU()
                     ]))
@@ -294,7 +364,12 @@ class HRNet(tf.keras.models.Model):
                     inchannels = num_channels_pre_layer[-1]
                     outchannels = num_channels_cur_layer[i] if j == i - num_branches_pre else inchannels
                     conv3x3s.append(Sequential([
-                        Conv2D(filters=outchannels, kernel_size=(3,3), strides=(2,2), padding="same", use_bias=False),
+                        Conv2D(
+                            filters=outchannels, 
+                            kernel_size=(3,3), 
+                            strides=(2,2), 
+                            padding="same", 
+                            use_bias=False),
                         BatchNormalization(),
                         ReLU()
                     ]))
@@ -334,9 +409,15 @@ class HRNet(tf.keras.models.Model):
 
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
-        if stride != 1 or self.inplanes != planes * block.expansion:
+        if stride != 1 or self.inplanes != planes*block.expansion:
+            # TODO: make it so this if statement = True when C = 32
             downsample = Sequential([
-                Conv2D(planes * block.expansion, kernel_size=(1,1), strides=(stride,stride), padding="same",use_bias=False),
+                Conv2D(
+                    planes * block.expansion, 
+                    kernel_size=(1,1), 
+                    strides=(stride,stride), 
+                    padding="same",
+                    use_bias=False),
                 BatchNormalization(momentum=BN_MOMENTUM)
             ])
 
@@ -358,6 +439,9 @@ class HRNet(tf.keras.models.Model):
         return ys
 
     def call(self, inputs, training=None, mask=None):
+
+        ########## STEM NET ##########
+
         x = self.conv1(inputs)
         x = self.bn1(x)
         x = self.relu(x)
@@ -365,10 +449,12 @@ class HRNet(tf.keras.models.Model):
         x = self.bn2(x)
         x = self.relu(x)
 
-        # STAGE 1
-        x = self.layer1(x)
+        ########## STAGE 1 ##########
 
-        # STAGE 2
+        x = self.layer1(x)
+        
+        ########## STAGE 2 ##########
+        
         x_list = []
         for i in range(self.stage2_cfg['NUM_BRANCHES']):
             if self.transition1[i] is not None:
@@ -377,38 +463,80 @@ class HRNet(tf.keras.models.Model):
                 x_list.append(x)
         y_list = self._forward_stage(self.stage2, x_list)
 
-        # STAGE 3
+        ########## STAGE 3 ##########
+        
         x_list = []
         for i in range(self.stage3_cfg['NUM_BRANCHES']):
-            if self.transition2[i] is not None:
+            if self.transition2[i] is not None and i < self.stage2_cfg['NUM_BRANCHES']:
+                x_list.append(self.transition2[i](y_list[i]))
+            elif self.transition2[i] is not None and i >= self.stage2_cfg['NUM_BRANCHES']:
                 x_list.append(self.transition2[i](y_list[-1]))
             else:
                 x_list.append(y_list[i])
         y_list = self._forward_stage(self.stage3, x_list)
 
-        # STAGE 4
+        ########## STAGE 4 ##########
+        
         x_list = []
         for i in range(self.stage4_cfg['NUM_BRANCHES']):
-            if self.transition3[i] is not None:
+            if self.transition3[i] is not None and i < self.stage3_cfg['NUM_BRANCHES']:
+                x_list.append(self.transition3[i](y_list[i]))
+            elif self.transition3[i] is not None and i >= self.stage3_cfg['NUM_BRANCHES']:
                 x_list.append(self.transition3[i](y_list[-1]))
             else:
                 x_list.append(y_list[i])
-        x = self._forward_stage(self.stage4, x_list)
+        y_list = self._forward_stage(self.stage4, x_list)
 
-        # Upsampling
-        x0_h, x0_w = x[0].get_shape()[1], x[0].get_shape()[2]
-        x1 = tf.image.resize(x[1], size=(x0_h, x0_w))
-        x2 = tf.image.resize(x[2], size=(x0_h, x0_w))
-        x3 = tf.image.resize(x[3], size=(x0_h, x0_w))
+        ######################  Classification head ######################
+        
+        y = self.incre_modules[0](y_list[0])  
 
-        # Concat
-        x0 = tf.cast(x[0], tf.float32)
-        x = tf.concat([x0, x1, x2, x3], axis=3)
+        for i in range(len(self.downsamp_modules)):
 
-        x = self.last_layer(x)
+            y = self.incre_modules[i+1](y_list[i+1]) + self.downsamp_modules[i](y)
 
-        return x
+        y = self.final_layer(y)
+
+        return y 
+        
+        
+    def train_step(self, data):
+        self.n_acum_step.assign_add(1)
+
+        x, y = data
+        # Gradient Tape
+        with tf.GradientTape() as tape:
+            y_pred = self(x, training=True)
+            loss = self.compiled_loss(y, y_pred, regularization_losses=self.losses)
+            scaled_loss = self.optimizer.get_scaled_loss(loss)
+            
+        # Calculate batch gradients
+        scaled_gradients = tape.gradient(scaled_loss, self.trainable_variables)
+        gradients = self.optimizer.get_unscaled_gradients(scaled_gradients)
+        # gradients = tape.gradient(loss, self.trainable_variables)
+            
+        # Accumulate batch gradients
+        for i in range(len(self.gradient_accumulation)):
+            self.gradient_accumulation[i].assign_add(gradients[i])
+ 
+        # If n_acum_step reach the n_gradients then we apply accumulated gradients to update the variables 
+        # otherwise do nothing
+        tf.cond(tf.equal(self.n_acum_step, self.n_gradients), self.apply_accu_gradients, lambda: None)
+
+        # update metrics
+        self.compiled_metrics.update_state(y, y_pred)
+        return {m.name: m.result() for m in self.metrics}
+
     
+    def apply_accu_gradients(self):
+        # apply accumulated gradients
+        self.optimizer.apply_gradients(zip(self.gradient_accumulation, self.trainable_variables))
+
+        # reset
+        self.n_acum_step.assign(0)
+        for i in range(len(self.gradient_accumulation)):
+            self.gradient_accumulation[i].assign(tf.zeros_like(self.trainable_variables[i], dtype=tf.float32))
+
     
     def build_model(self):
             
@@ -416,4 +544,10 @@ class HRNet(tf.keras.models.Model):
         inp_test = tf.random.normal(shape=(1, self.input_height, self.input_width, 3))
         out_test = self(inp_test)
 
-        self._name = "HRNet_W{}".format(self.W)
+        self._name = "HRNet_CLF_W{}".format(self.W)
+        
+        # Gradient accumilation
+        self.n_gradients = tf.constant(self.ACCUM_STEPS, dtype=tf.int32)
+        self.n_acum_step = tf.Variable(0, dtype=tf.int32, trainable=False)
+        self.gradient_accumulation = [tf.Variable(tf.zeros_like(v, dtype=tf.float32), 
+                                                  trainable=False) for v in self.trainable_variables]

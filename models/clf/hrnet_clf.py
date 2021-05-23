@@ -214,7 +214,15 @@ blocks_dict = {
 
 
 class HRNet_CLF(tf.keras.models.Model):
-    def __init__(self, stage1_cfg, stage2_cfg, stage3_cfg, stage4_cfg, input_height, input_width, n_classes, W=32):
+    def __init__(self, 
+                 stage1_cfg, 
+                 stage2_cfg, 
+                 stage3_cfg, 
+                 stage4_cfg, 
+                 input_height, 
+                 input_width, 
+                 n_classes, 
+                 W):
 
         super(HRNet_CLF, self).__init__()
 

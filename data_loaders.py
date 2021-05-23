@@ -6,20 +6,20 @@ import os
 
 class CityscapesLoader():
     
-    # TODO: Explore additional augmentations, see if random crop is being implemented correctly
-
-    def __init__(self, img_height, img_width, n_classes, sparse=False):
+    def __init__(self, img_height, img_width, n_classes):
 
         self.n_classes = n_classes
         self.img_height = img_height
         self.img_width = img_width
         self.MEAN = np.array([0.485, 0.456, 0.406])
         self.STD = np.array([0.229, 0.224, 0.225])
-        self.sparse = sparse
-
+        self.id2label = tf.constant([0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 3,  
+                                    4, 5, 0, 0, 0, 6, 0, 7, 8, 9, 10, 11, 
+                                    12, 13, 14, 15, 16, 0, 0, 17, 18, 19, 0], tf.int32)
+        
 
     @tf.function
-    def random_crop(self, image, mask):
+    def random_crop(self, img, seg):
         """
         Inputs: full resolution image and mask
         A scale between 0.5 and 1.0 is randomly chosen. 
@@ -31,78 +31,74 @@ class CityscapesLoader():
         scale = scales[tf.random.uniform(shape=[], minval=0, maxval=9, dtype=tf.int32)]
         scale = tf.cast(scale, tf.float32)
 
-        shape = tf.cast(tf.shape(image), tf.float32)
+        shape = tf.cast(tf.shape(img), tf.float32)
         h = tf.cast(shape[0] * scale, tf.int32)
         w = tf.cast(shape[1] * scale, tf.int32)
-        combined_tensor = tf.concat([image, mask], axis=2)
+        combined_tensor = tf.concat([img, seg], axis=2)
         combined_tensor = tf.image.random_crop(combined_tensor, size=[h, w, 4])
         return combined_tensor[:,:,0:3], combined_tensor[:,:,-1]
+
+
+    @tf.function
+    def normalize(self, img):
+        img = img / 255.0
+        img = img - self.MEAN
+        img = img / self.STD
+        return img
+
     
-
     @tf.function
-    def mask_to_categorical(self, image, mask):
-        mask = tf.squeeze(mask)
-        if self.sparse == False:
-            mask = tf.one_hot(tf.cast(mask, tf.int32), self.n_classes)
-        mask = tf.cast(mask, tf.int32)
-        return image, mask
-
-
-    @tf.function
-    def normalize(self, image, mask):
-        image = image / 255.0
-        image = image - self.MEAN
-        image = image / self.STD
-        return image, mask
-
-
-    @tf.function
-    def load_image_train(self, input_image, input_mask):
-
-        image = tf.cast(input_image, tf.uint8)
-        mask = tf.cast(input_mask, tf.uint8)
-
+    def load_image_train(self, datapoint):
+        img = datapoint['image_left']
+        seg = datapoint['segmentation_label']
+        
         if tf.random.uniform(()) > 0.5:
-            image = tf.image.flip_left_right(image)
-            mask = tf.image.flip_left_right(mask)
-
-
-        image, mask = self.random_crop(image, mask)
-        mask = tf.expand_dims(mask, axis=-1)
-
-        image = tf.image.resize(image, (self.img_height, self.img_width))
-        mask = tf.image.resize(mask, (self.img_height, self.img_width))
-
-        image, mask = self.normalize(tf.cast(image, tf.float32), mask)
-
-        if tf.random.uniform(()) > 0.5:
-            image = tf.image.random_brightness(image, 0.05)
-            image = tf.image.random_saturation(image, 0.6, 1.6)
-            image = tf.image.random_contrast(image, 0.7, 1.3)
-            image = tf.image.random_hue(image, 0.05)
-
-        image, mask = self.mask_to_categorical(image, mask)
-        mask = tf.squeeze(mask)
-
-        return image, mask
-   
-
-    def load_image_test(self, input_image, input_mask):
-        image = tf.image.resize(input_image, (self.img_height, self.img_width))
-        mask = tf.image.resize(input_mask, (self.img_height, self.img_width))
-        image, mask = self.normalize(tf.cast(image, tf.float32), mask)
-        image, mask = self.mask_to_categorical(image, mask)
-        mask = tf.squeeze(mask)
-        return image, mask
-
-
-    def load_image_eval(self, input_image, input_mask):
-        image = tf.image.resize(input_image, (self.img_height, self.img_width))
-        image, mask = self.normalize(tf.cast(image, tf.float32), input_mask)
-        image, mask = self.mask_to_categorical(image, mask)
-        mask = tf.squeeze(mask)
-        return image, mask
-
+            img = tf.image.flip_left_right(img)
+            seg = tf.image.flip_left_right(seg)
+            
+        img, seg = self.random_crop(img, seg)
+        seg = tf.expand_dims(seg, axis=-1)
+        
+        img = tf.image.resize(img, (self.img_height, self.img_width), method='bilinear')
+        seg = tf.image.resize(seg, (self.img_height, self.img_width), method='nearest')
+        img = self.normalize(tf.cast(img, tf.float32))
+        img = tf.image.random_brightness(img, 0.05)
+        img = tf.image.random_saturation(img, 0.9, 1.1)
+        img = tf.image.random_contrast(img, 0.9, 1.1)
+        img = tf.image.random_hue(img, 0.02)
+        
+        seg = tf.squeeze(seg)
+        seg = tf.gather(self.id2label, tf.cast(seg, tf.int32))
+        
+        return img, seg
+    
+    
+    @tf.function
+    def load_image_test(self, datapoint):
+        img = datapoint['image_left']
+        seg = datapoint['segmentation_label']
+        
+        img = tf.image.resize(img, (self.img_height, self.img_width), method='bilinear')
+        seg = tf.image.resize(seg, (self.img_height, self.img_width), method='nearest')
+        
+        img = self.normalize(tf.cast(img, tf.float32))
+        
+        seg = tf.squeeze(seg, axis=-1)
+        seg = tf.gather(self.id2label, tf.cast(seg, tf.int32))
+        
+        return img, seg
+    
+    
+    @tf.function
+    def load_image_eval(self, datapoint):
+        img = datapoint['image_left']
+        seg = datapoint['segmentation_label']
+        seg = tf.expand_dims(seg, axis=-1)
+        img = tf.image.resize(img, (self.img_height, self.img_width), method='bilinear')
+        img = self.normalize(tf.cast(img, tf.float32))
+        seg = tf.squeeze(seg)
+        seg = tf.gather(self.id2label, tf.cast(seg, tf.int32))
+        return img, seg
 
 
 class SunLoader():
@@ -156,16 +152,16 @@ class SunLoader():
         return label_encodings
 
     @tf.function
-    def random_crop(self, image, label):
-        scales = tf.convert_to_tensor(np.array([0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375, 1.0]))
-        scale = scales[tf.random.uniform(shape=[], minval=0, maxval=9, dtype=tf.int32)]
+    def random_crop(self, image):
+        scales = tf.convert_to_tensor(np.array([0.75, 0.8125, 0.875, 0.9375, 1.0]))
+        scale = scales[tf.random.uniform(shape=[], minval=0, maxval=5, dtype=tf.int32)]
         scale = tf.cast(scale, tf.float32)
 
         shape = tf.cast(tf.shape(image), tf.float32)
         h = tf.cast(shape[0] * scale, tf.int32)
         w = tf.cast(shape[1] * scale, tf.int32)
         image = tf.image.random_crop(image, size=[h, w, 3])
-        return image, label
+        return image
 
     @tf.function
     def normalize(self, image, label):
@@ -181,6 +177,8 @@ class SunLoader():
         img = tf.io.read_file(image_path)
         img = tf.image.decode_png(img, channels=3)
         img = tf.cast(img, dtype=tf.float32)
+        if tf.random.uniform(()) > 0.5:
+            img = self.random_crop(img)
         img = tf.image.resize(images=img, size=[self.img_height, self.img_width])
         img = tf.image.random_brightness(img, 0.05)
         img = tf.image.random_saturation(img, lower=0.8, upper=1.2)
@@ -210,8 +208,6 @@ class SunLoader():
         return img, label
 
 
-
-
 class ImageNetLoader():
     
     def __init__(self, img_height, img_width, n_classes, sparse=False):
@@ -220,14 +216,13 @@ class ImageNetLoader():
         self.img_width = img_width
         self.MEAN = np.array([0.485, 0.456, 0.406])
         self.STD = np.array([0.229, 0.224, 0.225])
-        self.sparse = sparse
         
     
     @tf.function
     def random_crop(self, image, label):
 
-        scales = tf.convert_to_tensor(np.array([0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375, 1.0]))
-        scale = scales[tf.random.uniform(shape=[], minval=0, maxval=9, dtype=tf.int32)]
+        scales = tf.convert_to_tensor(np.array([0.75, 0.8125, 0.875, 0.9375, 1.0]))
+        scale = scales[tf.random.uniform(shape=[], minval=0, maxval=5, dtype=tf.int32)]
         scale = tf.cast(scale, tf.float32)
 
         shape = tf.cast(tf.shape(image), tf.float32)
@@ -254,7 +249,7 @@ class ImageNetLoader():
         if tf.random.uniform(()) > 0.5:
             image = tf.image.flip_left_right(image)
 
-        #image, label = self.random_crop(image, label)
+        image, label = self.random_crop(image, label)
         image = tf.image.resize(image, (self.img_height, self.img_width))
         image, label = self.normalize(tf.cast(image, tf.float32), label)
 
@@ -276,9 +271,6 @@ class ImageNetLoader():
         return image, label
 
 
-
-
-    
 def get_image_stats(X_train):
     
     R_MEAN = np.mean(X_train[:,:,:,0]) 
