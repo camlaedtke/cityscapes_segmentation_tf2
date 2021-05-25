@@ -280,12 +280,17 @@ class HRNet(tf.keras.models.Model):
                 BatchNormalization(momentum=BN_MOMENTUM),
                 ReLU(),
                 Conv2DTranspose(
-                    filters=self.NUM_CLASSES, 
+                    filters=self.W, 
                     kernel_size=1, 
                     strides=4, 
                     padding="same", 
+                    use_bias=False),
+                Conv2D(filters=self.NUM_CLASSES, 
+                    kernel_size=1, 
+                    strides=1, 
+                    padding="same", 
                     use_bias=False, 
-                    dtype="float32"),
+                    dtype="float32")
             ])
         else:
             self.last_layer = Sequential([
@@ -471,12 +476,12 @@ class HRNet(tf.keras.models.Model):
         with tf.GradientTape() as tape:
             y_pred = self(x, training=True)
             loss = self.compiled_loss(y, y_pred, regularization_losses=self.losses)
-            scaled_loss = self.optimizer.get_scaled_loss(loss)
+            # scaled_loss = self.optimizer.get_scaled_loss(loss)
             
         # Calculate batch gradients
-        scaled_gradients = tape.gradient(scaled_loss, self.trainable_variables)
-        gradients = self.optimizer.get_unscaled_gradients(scaled_gradients)
-        # gradients = tape.gradient(loss, self.trainable_variables)
+        # scaled_gradients = tape.gradient(scaled_loss, self.trainable_variables)
+        # gradients = self.optimizer.get_unscaled_gradients(scaled_gradients)
+        gradients = tape.gradient(loss, self.trainable_variables)
             
         # Accumulate batch gradients
         for i in range(len(self.gradient_accumulation)):

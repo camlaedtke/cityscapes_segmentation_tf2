@@ -62,10 +62,11 @@ class CityscapesLoader():
         img = tf.image.resize(img, (self.img_height, self.img_width), method='bilinear')
         seg = tf.image.resize(seg, (self.img_height, self.img_width), method='nearest')
         img = self.normalize(tf.cast(img, tf.float32))
-        img = tf.image.random_brightness(img, 0.05)
-        img = tf.image.random_saturation(img, 0.9, 1.1)
-        img = tf.image.random_contrast(img, 0.9, 1.1)
-        img = tf.image.random_hue(img, 0.02)
+        if tf.random.uniform(()) > 0.5:
+            img = tf.image.random_brightness(img, 0.1)
+            img = tf.image.random_saturation(img, 0.7, 1.3)
+            img = tf.image.random_contrast(img, 0.7, 1.3)
+            img = tf.image.random_hue(img, 0.05)
         
         seg = tf.squeeze(seg)
         seg = tf.gather(self.id2label, tf.cast(seg, tf.int32))

@@ -272,10 +272,12 @@ class HRNet(tf.keras.models.Model):
                 Conv2D(filters=last_inp_channels, kernel_size=1, strides=1, padding="same", use_bias=False),
                 BatchNormalization(momentum=BN_MOMENTUM),
                 ReLU(),
-                Conv2DTranspose(filters=self.W, kernel_size=1, strides=4, padding="same", use_bias=False),
+                Conv2D(filters=self.W, kernel_size=1, strides=1, padding="same", use_bias=False),
                 BatchNormalization(momentum=BN_MOMENTUM),
                 ReLU(),
-                Conv2D(filters=self.NUM_CLASSES, kernel_size=1, strides=1, padding="same", dtype="float32"),
+                Lambda(lambda x: tf.image.resize(x, size=(input_height, input_width), method='bilinear')),
+                Conv2D(filters=self.NUM_CLASSES, kernel_size=1, strides=1, padding="same", use_bias=False, 
+                    dtype="float32")
             ])
         else:
             self.last_layer = Sequential([
