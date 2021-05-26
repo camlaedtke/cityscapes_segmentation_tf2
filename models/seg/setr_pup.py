@@ -47,15 +47,16 @@ class SelfAttention(tf.keras.layers.Layer):
         self.heads = heads
         self.scale = dimension ** -0.5
 
-        self.mlp_in = tf.keras.layers.Dense(dimension * 3, use_bias=False)
-        self.mlp_out = tf.keras.layers.Dense(dimension)
-
+        self.qkv = Dense(dimension * 3, use_bias=False)
         self.rearrange_attention = Rearrange('b n (qkv h d) -> qkv b h n d', qkv=3, h=self.heads)
+        self.attn_dropout = Dropout(dropout_rate)
+        
         self.rearrange_output = Rearrange('b h n d -> b n (h d)')
-        self.dropout = Dropout(dropout_rate)
+        self.proj = Dense(dimension)
+        self.proj_dropout = Dropout(dropout_rate)
 
     def call(self, inputs):
-        qkv = self.mlp_in(inputs)
+        qkv = self.qkv(inputs)
         qkv = self.rearrange_attention(qkv)
 
         q = qkv[0]
@@ -64,12 +65,13 @@ class SelfAttention(tf.keras.layers.Layer):
 
         dot_product = tf.einsum('bhid,bhjd->bhij', q, k) * self.scale
         attention = tf.nn.softmax(dot_product, axis=-1)
+        attention = self.attn_dropout(attention)
 
-        out = tf.einsum('bhij,bhjd->bhid', attention, v)
-        out = self.rearrange_output(out)
-        out = self.mlp_out(out)
-        out = self.dropout(out)
-        return out
+        x = tf.einsum('bhij,bhjd->bhid', attention, v)
+        x = self.rearrange_output(x)
+        x = self.proj(x)
+        x = self.proj_dropout(x)
+        return x
 
 
 class Residual(tf.keras.layers.Layer):
@@ -118,15 +120,6 @@ class FeedForward(tf.keras.layers.Layer):
         return self.net(x)
 
 
-def _forward_stage(stage, xs):
-    ys = xs
-
-    for module in stage:
-        ys = module(ys)
-        if not isinstance(ys, list):
-            ys = [ys]
-    return ys
-
 
 class TransformerModel(tf.keras.models.Model):
     def __init__(
@@ -146,18 +139,16 @@ class TransformerModel(tf.keras.models.Model):
                     Residual(
                         PreNormDrop(
                             dropout_rate,
-                            SelfAttention(
-                                dim, heads=heads, dropout_rate=attn_dropout_rate
-                            ),
+                            SelfAttention(dim, heads=heads, dropout_rate=attn_dropout_rate),
                         )
                     ),
                     Residual(
-                        PreNorm(FeedForward(dim, mlp_dim, dropout_rate))
+                        PreNorm(
+                            FeedForward(dim, mlp_dim, dropout_rate))
                     ),
                 ]
             )
         self.net = Sequential(layers)
-        # print(self.net.layers)
 
     def call(self, x):
         return self.net(x)
@@ -167,15 +158,13 @@ class setr_pup(tf.keras.models.Model):
     
     def __init__(
         self,
+        layers,
+        hidden_dim,
+        heads,
         img_size, 
         n_classes,
-        num_patches, 
         patch_size,
-        transformer_layers,
-        dim,
-        heads,
-        mlp_dim,
-        ACCUM_STEPS,
+        num_patches, 
         dropout_rate=0.1,
         attn_dropout_rate=0.1,
     ):
@@ -184,35 +173,34 @@ class setr_pup(tf.keras.models.Model):
         
         self._name = "SETR_PUP"
         self.img_size = img_size
-        self.ACCUM_STEPS = ACCUM_STEPS
+        self.mlp_dim = int(hidden_dim*4)
         
         self.patch_creator = Patches(patch_size)
-        self.patch_encoder = PatchEncoder(num_patches, dim)
+        self.patch_encoder = PatchEncoder(num_patches, hidden_dim)
 
         self.transformer = TransformerModel(
-            dim=dim,
-            depth=transformer_layers,
+            dim=hidden_dim,
+            depth=layers,
             heads=heads,
-            mlp_dim=dim,
+            mlp_dim=self.mlp_dim,
             dropout_rate=0.1,
             attn_dropout_rate=0.1,
         )
 
-
         self.last_layer = Sequential([
-            Reshape(target_shape=(int(img_size//16), int(img_size//16), dim)),
+            Reshape(target_shape=(int(img_size//16), int(img_size//16), hidden_dim)),
 
             UpSampling2D(size=(2,2), interpolation='bilinear'),
-            Conv2D(dim, kernel_size=(1,1), strides=(1,1), padding='same'),
+            Conv2D(hidden_dim, kernel_size=(3,3), strides=(1,1), padding='same'),
 
             UpSampling2D(size=(2,2), interpolation='bilinear'),
-            Conv2D(256, kernel_size=(1,1), strides=(1,1), padding='same'),
+            Conv2D(256, kernel_size=(3,3), strides=(1,1), padding='same'),
 
             UpSampling2D(size=(2,2), interpolation='bilinear'),
-            Conv2D(256, kernel_size=(1,1), strides=(1,1), padding='same'),
+            Conv2D(256, kernel_size=(3,3), strides=(1,1), padding='same'),
 
             UpSampling2D(size=(2,2), interpolation='bilinear'),
-            Conv2D(256, kernel_size=(1,1), strides=(1,1), padding='same'),
+            Conv2D(256, kernel_size=(3,3), strides=(1,1), padding='same'),
             Conv2D(n_classes, kernel_size=(1,1), strides=(1,1), padding='same', dtype='float32'),
         ])
         
@@ -233,44 +221,6 @@ class setr_pup(tf.keras.models.Model):
         
         return x
         
-        
-    def train_step(self, data):
-        self.n_acum_step.assign_add(1)
-
-        x, y = data
-        # Gradient Tape
-        with tf.GradientTape() as tape:
-            y_pred = self(x, training=True)
-            loss = self.compiled_loss(y, y_pred, regularization_losses=self.losses)
-            scaled_loss = self.optimizer.get_scaled_loss(loss)
-            
-        # Calculate batch gradients
-        scaled_gradients = tape.gradient(scaled_loss, self.trainable_variables)
-        gradients = self.optimizer.get_unscaled_gradients(scaled_gradients)
-        # gradients = tape.gradient(loss, self.trainable_variables)
-            
-        # Accumulate batch gradients
-        for i in range(len(self.gradient_accumulation)):
-            self.gradient_accumulation[i].assign_add(gradients[i])
- 
-        # If n_acum_step reach the n_gradients then we apply accumulated gradients to update the variables 
-        # otherwise do nothing
-        tf.cond(tf.equal(self.n_acum_step, self.n_gradients), self.apply_accu_gradients, lambda: None)
-
-        # update metrics
-        self.compiled_metrics.update_state(y, y_pred)
-        return {m.name: m.result() for m in self.metrics}
-
-    
-    def apply_accu_gradients(self):
-        # apply accumulated gradients
-        self.optimizer.apply_gradients(zip(self.gradient_accumulation, self.trainable_variables))
-
-        # reset
-        self.n_acum_step.assign(0)
-        for i in range(len(self.gradient_accumulation)):
-            self.gradient_accumulation[i].assign(tf.zeros_like(self.trainable_variables[i], dtype=tf.float32))
-            
             
     def build_model(self):
             
@@ -278,11 +228,6 @@ class setr_pup(tf.keras.models.Model):
         inp_test = tf.random.normal(shape=(1, self.img_size, self.img_size, 3))
         out_test = self(inp_test)
         
-         # Gradient accumilation
-        self.n_gradients = tf.constant(self.ACCUM_STEPS, dtype=tf.int32)
-        self.n_acum_step = tf.Variable(0, dtype=tf.int32, trainable=False)
-        self.gradient_accumulation = [tf.Variable(tf.zeros_like(v, dtype=tf.float32), 
-                                                  trainable=False) for v in self.trainable_variables]
 
         
 

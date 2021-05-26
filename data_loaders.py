@@ -27,8 +27,8 @@ class CityscapesLoader():
         and randomly crop to the scaled height and width.
         """
         scales = tf.convert_to_tensor(np.array(
-            [0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375, 1.0]))
-        scale = scales[tf.random.uniform(shape=[], minval=0, maxval=9, dtype=tf.int32)]
+            [0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375, 1.0]))
+        scale = scales[tf.random.uniform(shape=[], minval=0, maxval=13, dtype=tf.int32)]
         scale = tf.cast(scale, tf.float32)
 
         shape = tf.cast(tf.shape(img), tf.float32)
