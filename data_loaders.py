@@ -1,3 +1,17 @@
+# ---
+# jupyter:
+#   jupytext:
+#     text_representation:
+#       extension: .py
+#       format_name: light
+#       format_version: '1.5'
+#       jupytext_version: 1.10.0
+#   kernelspec:
+#     display_name: Python 3
+#     language: python
+#     name: python3
+# ---
+
 import tensorflow as tf
 import numpy as np
 import glob
@@ -25,11 +39,13 @@ class CityscapesLoader():
         A scale between 0.5 and 1.0 is randomly chosen. 
         Then, we multiply original height and width by the scale, 
         and randomly crop to the scaled height and width.
+        [0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375, 1.0]
+        
         """
         scales = tf.convert_to_tensor(np.array(
-            [0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375, 1.0]))
-        scale = scales[tf.random.uniform(shape=[], minval=0, maxval=13, dtype=tf.int32)]
-        scale = tf.cast(scale, tf.float32)
+        [0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375, 1.0], 
+            dtype=np.float32))
+        scale = scales[tf.random.uniform(shape=[], minval=0, maxval=9, dtype=tf.int32)]
 
         shape = tf.cast(tf.shape(img), tf.float32)
         h = tf.cast(shape[0] * scale, tf.int32)
@@ -56,17 +72,18 @@ class CityscapesLoader():
             img = tf.image.flip_left_right(img)
             seg = tf.image.flip_left_right(seg)
             
+        # if tf.random.uniform(()) > 0.5:
+        #     img = tf.image.random_brightness(img, 0.1)
+        #     img = tf.image.random_saturation(img, 0.7, 1.3)
+        #     img = tf.image.random_contrast(img, 0.7, 1.3)
+        #     img = tf.image.random_hue(img, 0.05)
+            
         img, seg = self.random_crop(img, seg)
         seg = tf.expand_dims(seg, axis=-1)
         
         img = tf.image.resize(img, (self.img_height, self.img_width), method='bilinear')
         seg = tf.image.resize(seg, (self.img_height, self.img_width), method='nearest')
         img = self.normalize(tf.cast(img, tf.float32))
-        if tf.random.uniform(()) > 0.5:
-            img = tf.image.random_brightness(img, 0.1)
-            img = tf.image.random_saturation(img, 0.7, 1.3)
-            img = tf.image.random_contrast(img, 0.7, 1.3)
-            img = tf.image.random_hue(img, 0.05)
         
         seg = tf.squeeze(seg)
         seg = tf.gather(self.id2label, tf.cast(seg, tf.int32))
@@ -79,9 +96,9 @@ class CityscapesLoader():
         img = datapoint['image_left']
         seg = datapoint['segmentation_label']
         
+        # img = tf.cast(img, tf.float32)
         img = tf.image.resize(img, (self.img_height, self.img_width), method='bilinear')
         seg = tf.image.resize(seg, (self.img_height, self.img_width), method='nearest')
-        
         img = self.normalize(tf.cast(img, tf.float32))
         
         seg = tf.squeeze(seg, axis=-1)

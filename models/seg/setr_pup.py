@@ -154,7 +154,7 @@ class TransformerModel(tf.keras.models.Model):
         return self.net(x)
 
 
-class setr_pup(tf.keras.models.Model):
+class SETR_PUP(tf.keras.models.Model):
     
     def __init__(
         self,
@@ -169,7 +169,7 @@ class setr_pup(tf.keras.models.Model):
         attn_dropout_rate=0.1,
     ):
         
-        super().__init__()
+        super(SETR_PUP, self).__init__()
         
         self._name = "SETR_PUP"
         self.img_size = img_size
