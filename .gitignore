@@ -133,3 +133,5 @@ dmypy.json
 records/
 weights/
 SUN397/
+workspace/
+__pycache__/

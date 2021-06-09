@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: light
 #       format_version: '1.5'
-#       jupytext_version: 1.10.0
+#       jupytext_version: 1.11.1
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -19,6 +19,103 @@ import os
 
 
 class CityscapesLoader():
+    
+    def __init__(self, img_height, img_width, n_classes):
+
+        self.n_classes = n_classes
+        self.img_height = img_height
+        self.img_width = img_width
+        self.MEAN = np.array([0.485, 0.456, 0.406])
+        self.STD = np.array([0.229, 0.224, 0.225])
+        
+
+    @tf.function
+    def random_crop(self, img, seg):
+        """
+        Inputs: full resolution image and mask
+        A scale between 0.5 and 1.0 is randomly chosen. 
+        Then, we multiply original height and width by the scale, 
+        and randomly crop to the scaled height and width.
+        [0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375, 1.0]
+        
+        """
+        scales = tf.convert_to_tensor(np.array(
+        [0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375, 1.0], 
+            dtype=np.float32))
+        scale = scales[tf.random.uniform(shape=[], minval=0, maxval=13, dtype=tf.int32)]
+
+        shape = tf.cast(tf.shape(img), tf.float32)
+        h = tf.cast(shape[0] * scale, tf.int32)
+        w = tf.cast(shape[1] * scale, tf.int32)
+        combined_tensor = tf.concat([img, seg], axis=2)
+        combined_tensor = tf.image.random_crop(combined_tensor, size=[h, w, 4])
+        return combined_tensor[:,:,0:3], combined_tensor[:,:,-1]
+
+
+    @tf.function
+    def normalize(self, img):
+        img = img / 255.0
+        img = img - self.MEAN
+        img = img / self.STD
+        return img
+
+    
+    @tf.function
+    def load_image_train(self, input_image, input_seg):
+        img = tf.cast(input_image, tf.uint8)
+        seg = tf.cast(input_seg, tf.uint8)
+        
+        if tf.random.uniform(()) > 0.5:
+            img = tf.image.flip_left_right(img)
+            seg = tf.image.flip_left_right(seg)
+        if tf.random.uniform(()) > 0.5:
+            img = tf.image.random_brightness(img, 0.1)
+        if tf.random.uniform(()) > 0.5:
+            img = tf.image.random_saturation(img, 0.7, 1.3)
+        if tf.random.uniform(()) > 0.5:
+            img = tf.image.random_contrast(img, 0.7, 1.3)
+        if tf.random.uniform(()) > 0.5:
+            img = tf.image.random_hue(img, 0.05)
+            
+        img, seg = self.random_crop(img, seg)
+        seg = tf.expand_dims(seg, axis=-1)
+        
+        img = tf.image.resize(img, (self.img_height, self.img_width), method='bilinear')
+        seg = tf.image.resize(seg, (self.img_height, self.img_width), method='nearest')
+        img = self.normalize(tf.cast(img, tf.float32))
+        
+        seg = tf.squeeze(tf.cast(seg, tf.int32))
+        return img, seg
+    
+    
+    @tf.function
+    def load_image_test(self, input_image, input_seg):
+        img = tf.cast(input_image, tf.uint8)
+        seg = tf.cast(input_seg, tf.uint8)
+        
+        # img = tf.cast(img, tf.float32)
+        img = tf.image.resize(img, (self.img_height, self.img_width), method='bilinear')
+        seg = tf.image.resize(seg, (self.img_height, self.img_width), method='nearest')
+        img = self.normalize(tf.cast(img, tf.float32))
+        
+        seg = tf.squeeze(tf.cast(seg, tf.int32))
+        return img, seg
+    
+    
+    @tf.function
+    def load_image_eval(self, input_image, input_seg):
+        img = tf.cast(input_image, tf.uint8)
+        seg = tf.cast(input_seg, tf.uint8)
+        
+        seg = tf.expand_dims(seg, axis=-1)
+        img = tf.image.resize(img, (self.img_height, self.img_width), method='bilinear')
+        img = self.normalize(tf.cast(img, tf.float32))
+        
+        seg = tf.squeeze(tf.cast(seg, tf.int32))
+        return img, seg
+
+
+class CityscapesLoaderTFDS():
     
     def __init__(self, img_height, img_width, n_classes):
 
@@ -71,12 +168,14 @@ class CityscapesLoader():
         if tf.random.uniform(()) > 0.5:
             img = tf.image.flip_left_right(img)
             seg = tf.image.flip_left_right(seg)
-            
-        # if tf.random.uniform(()) > 0.5:
-        #     img = tf.image.random_brightness(img, 0.1)
-        #     img = tf.image.random_saturation(img, 0.7, 1.3)
-        #     img = tf.image.random_contrast(img, 0.7, 1.3)
-        #     img = tf.image.random_hue(img, 0.05)
+        if tf.random.uniform(()) > 0.5:
+            img = tf.image.random_brightness(img, 0.1)
+        if tf.random.uniform(()) > 0.5:
+            img = tf.image.random_saturation(img, 0.7, 1.3)
+        if tf.random.uniform(()) > 0.5:
+            img = tf.image.random_contrast(img, 0.7, 1.3)
+        if tf.random.uniform(()) > 0.5:
+            img = tf.image.random_hue(img, 0.05)
             
         img, seg = self.random_crop(img, seg)
         seg = tf.expand_dims(seg, axis=-1)
